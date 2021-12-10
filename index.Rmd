@@ -1,0 +1,258 @@
+---
+title: 'Project 2: Data Mining, Classification, Prediction'
+author: "SDS322E"
+date: ''
+output:
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+  pdf_document:
+    toc: no
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, fig.align = "center", warning = F, message = F,
+tidy=TRUE, tidy.opts=list(width.cutoff=60), R.options=list(max.print=100))
+
+class_diag <- function(score, truth, positive, cutoff=.5){
+
+  pred <- factor(score>cutoff,levels=c("TRUE","FALSE"))
+  truth <- factor(truth==positive, levels=c("TRUE","FALSE"))
+
+  tab<-table(truth, pred)
+  acc=sum(diag(tab))/sum(tab)
+  sens=tab[1,1]/rowSums(tab)[1]
+  spec=tab[2,2]/rowSums(tab)[2]
+  ppv=tab[1,1]/colSums(tab)[1]
+
+#CALCULATE F1
+  f1=2*(sens*ppv)/(sens+ppv)
+  
+#CALCULATE EXACT AUC
+  truth<-as.numeric(truth=="TRUE")
+  ord<-order(score, decreasing=TRUE)
+  score <- score[ord]; truth <- truth[ord]
+  TPR=cumsum(truth)/max(1,sum(truth))
+  FPR=cumsum(!truth)/max(1,sum(!truth))
+  dup<-c(score[-1]>=score[-length(score)], FALSE)
+  TPR<-c(0,TPR[!dup],1); FPR<-c(0,FPR[!dup],1)
+  n <- length(TPR)
+  auc<- sum( ((TPR[-1]+TPR[-n])/2) * (FPR[-1]-FPR[-n]) )
+  round(data.frame(acc,sens,spec,ppv,f1,ba=(sens+spec)/2,auc, row.names = "Metrics"),4)
+}
+```
+
+# Mining, Classification, Prediction
+
+## McKenzie Castro mnc927
+
+### Introduction 
+
+Paragraph or two introducing your datasets and variables, why they are interesting to you, etc. See instructions for more information
+
+```{R}
+library(tidyverse)
+library(fivethirtyeight)
+library(fivethirtyeightdata)
+drivers <- read_csv("/stor/home/mnc927/data/bad-drivers/bad-drivers.csv")
+glimpse(drivers)
+
+drivers2 <- drivers %>% mutate(Region = fct_collapse(State, "Eastern" = c("Connecticut", "Maine", "Massachusetts", "New Hampshire", "Rhode Island", "Vermont", "New Jersey", "New York", "Pennsylvania", "Illinois", "Indiana", "Michigan", "Ohio", "Wisconsin", "Iowa", "Kansas", "Minnesota", "Missouri", "Nebraska", "North Dakota", "South Dakota", "Delaware", "Florida", "Georgia", "Maryland", "District of Columbia", "North Carolina", "South Carolina", "Virginia", "West Virginia", "Alabama", "Kentucky", "Mississippi", "Tennessee", "Arkansas", "Louisiana", "Oklahoma", "Texas"), "Western" = c("Arizona", "Colorado", "Idaho", "Montana", "Nevada", "New Mexico", "Utah", "Wyoming", "Alaska", "California", "Hawaii", "Oregon", "Washington")))
+
+library(dplyr)
+drivers2 <- rename(drivers2, "FatalCollisions" = "Number of drivers involved in fatal collisions per billion miles")
+drivers2 <- rename(drivers2, "Speeding" = "Percentage Of Drivers Involved In Fatal Collisions Who Were Speeding")
+drivers2 <- rename(drivers2, "Alcohol" = "Percentage Of Drivers Involved In Fatal Collisions Who Were Alcohol-Impaired")
+drivers2 <- rename(drivers2, "NotDistracted" = "Percentage Of Drivers Involved In Fatal Collisions Who Were Not Distracted")
+drivers2 <- rename(drivers2, "NoAccidents" = "Percentage Of Drivers Involved In Fatal Collisions Who Had Not Been Involved In Any Previous Accidents")
+drivers2 <- rename(drivers2, "Losses" = "Losses incurred by insurance companies for collisions per insured driver ($)")
+drivers2 <- rename(drivers2, "Premium" = "Car Insurance Premiums ($)")
+head(drivers2)
+```
+*The dataset I am using consists of information on which U.S. state has the worst drivers based on number of drivers involved in fatal collisions per billion miles, percentage of drivers involved in fatal collisions who were speeding, alcohol-impaired, not distracted, and not involved in previous accidents, as well as car insurance premium and losses incured by insurance companies for collisions per insured driver. I found the data using 'fivethirtyeight'. The variables are measuring percentage of drivers involved in fatal collisions under various cirumstances, as well as car insurance premiums and losses in dollar amount. There are 51 observations, for all fifty states plus Washington, D.C. I created a binary variable called Region that groups states into two regions, Eastern and Western. There are thirty eight observations in the Eastern group and thirteen for Western. Eastern is equal to 1 and Western is equal to 0.*
+
+### Cluster Analysis
+
+```{R}
+library(cluster)
+clust_dat<- drivers2 %>% dplyr::select(Speeding, Alcohol)
+
+library(cluster)
+sil_width<-vector() 
+for(i in 2:10){  
+  kms <- kmeans(clust_dat,centers=i) 
+  sil <- silhouette(kms$cluster,dist(clust_dat)) 
+  sil_width[i]<-mean(sil[,3]) 
+}
+
+pam1<-clust_dat%>%pam(k=2)
+pam1
+
+pamclust<-clust_dat%>%mutate(cluster=as.factor(pam1$clustering)) 
+pamclust%>%ggplot(aes(Speeding, Alcohol,color=cluster))+geom_point()
+pamclust%>%group_by(cluster)%>%summarize_if(is.numeric,mean,na.rm=T)
+
+pam1$silinfo$avg.width
+plot(pam1,which=2)
+
+pam_dat<- drivers2%>%select(Speeding, Alcohol)
+sil_width<-vector()
+for(i in 2:10){  
+  pam_fit <- pam(pam_dat, k = i)  
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+ggplot()+geom_line(aes(x=1:10,y=sil_width))+scale_x_continuous(name="k",breaks=1:10)
+
+final1 <- drivers2 %>% select(-Region) %>% select(-State) %>% scale %>% as.data.frame
+pam2 <- final1 %>% pam(2)
+
+final1 <- final1 %>% mutate(cluster=as.factor(pam2$clustering))
+ggplot(final1, aes(x=Speeding,y=Alcohol, color=cluster))+geom_point()
+library(plotly)
+final1%>%plot_ly(x= ~Speeding,  y = ~Alcohol, z = ~NotDistracted, color= ~cluster, type = "scatter3d", mode = "markers")
+library(GGally)
+ggpairs(final1, aes(color=cluster))
+```
+*Using PAM to find silhouette width, I decided to use two clusters, as two had the highest silhouette width. In terms of the original variables and observations, cluster one represents the higher values for Percent Speeding and Percent Alcohol, and cluster two represents the lower values for the same variables. The variable that shows the greatest difference between the two clusters is Percent Speeding. The variable that shows the least difference between the two clusters is Percent Not Distracted. The cluster solution is reasonable in terms of average silhouette width, as the original solution had a silhoutte width of 0.53.*
+    
+### Dimensionality Reduction with PCA
+
+```{R}
+drivers3 <- drivers2 %>% select(-Region) %>% select(-State)
+driver_nums <- drivers3 %>% select_if(is.numeric) %>% scale
+
+drivers_pca <- princomp(driver_nums)
+summary(drivers_pca, loadings = T)
+
+eigval <- drivers_pca$sdev^2
+varprop = round(eigval/sum(eigval), 2)
+ggplot() + geom_bar(aes(y=varprop, x=1:7), stat="identity") + xlab("") + geom_path(aes(y=varprop, x=1:7)) + 
+  geom_text(aes(x=1:7, y=varprop, label=round(varprop, 2)), vjust=1, col="white", size=4) + 
+  scale_y_continuous(breaks=seq(0, .6, .2), labels = scales::percent) + 
+  scale_x_continuous(breaks=1:10)
+
+round(cumsum(eigval)/sum(eigval), 2)
+eigval
+
+library(factoextra)
+fviz_pca_biplot(drivers_pca)
+```
+*I retained four PC values.75% of the variance in the datasets is explained by these four PCs. Scoring high one PC1 indicates high scores on Percent Speeding, Alcohol, and Not Distracted, but low scores on Percent No Accidents, Premiums, and Losses. The opposite is true when scoring low on PC1. Scoring high on PC2 means high values on Percent Speeding, Alcohol, Not Distracted, Premium, and Losses, but low values on Percent No Accidents, and scoring low on PC2 means low values on the same variables, and scoring high on Percent No Accidents. Scoring high on PC3 means low Percent Not Distracted, and high Fatal Collisions, Percent Alcohol, Percent No Accidents, Premium, and Losses. Scoring low on PC3 means high Percent Not Distracted and low values for Fatal Collisions, Percent Alcohol, Percent No Accidents, Premium, and Losses. PC4 is a Percent Speeding versus Percent No Accidents axis. Scoring high on PC4 means high values for Fatal Collisions, Percent Not Distracted, and Losses, but low values for Percent Speeding and Percent No Accidents. Scoring low on PC4 means low values for Fatal Collisions, Percent Not Distracted, and Losses, but high values for Percent Speeding and Percent No Accidents.*
+
+###  Linear Classifier
+
+```{R}
+
+drivers3 <- drivers2 %>% select(-State)
+fit1 <- glm(Region == "Western" ~., data = drivers3, family = "binomial")
+score <- predict(fit1, type="response")
+score %>% round(3)
+
+probs <- predict(fit1, type = "response")
+class_diag(probs, drivers3$Region, positive="Western") 
+table(truth = drivers3$Region, predictions = probs>.5)
+
+```
+
+```{R}
+drivers5 <- drivers2 %>% select(-State)
+k=5
+data<-drivers5[sample(nrow(drivers5)),] 
+folds<-cut(seq(1:nrow(drivers5)),breaks=k,labels=F)
+diags<-NULL
+for(i in 1:k){
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$Region
+  fit<-glm(Region~., data=train, family = "binomial")
+  probs<-predict(fit,newdata = test, type = "response")
+  diags<-rbind(diags,class_diag(probs,truth, positive="Western"))
+}
+summarize_all(diags,mean)
+
+```
+Discussion here
+
+### Non-Parametric Classifier
+
+```{R}
+library(caret)
+knn_fit <- knn3(factor(Region=="Western",levels=c("TRUE","FALSE")) ~ Speeding + Alcohol + NoAccidents + NotDistracted + FatalCollisions + Premium + Losses, data=drivers5, k=5)
+y_hat_knn <- predict(knn_fit,drivers5)
+y_hat_knn
+
+table(truth= factor(drivers5$Region=="Western", levels=c("TRUE","FALSE")),
+      prediction= factor(y_hat_knn[,1]>.5, levels=c("TRUE","FALSE")))
+class_diag(y_hat_knn[,1],drivers2$Region, positive="Western")
+```
+
+```{R}
+set.seed(1234)
+drivers5 <- drivers2 %>% select(-State)
+k=5
+data<-drivers5[sample(nrow(drivers5)),] 
+folds<-cut(seq(1:nrow(drivers5)),breaks=k,labels=F)
+diags<-NULL
+for(i in 1:k){
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$Region
+  fit<-knn3(Region~.,data=train)
+  probs<-predict(fit,newdata = test)[,2]
+  diags<-rbind(diags,class_diag(probs,truth, positive="Western"))
+}
+summarize_all(diags,mean)
+
+fit2 <-glm(Region~., data=drivers5, family="binomial")
+coef(fit2)
+probs3<-predict(fit2,type="response")
+class_diag(probs3,drivers5$Region, positive="Western")
+```
+*The original calculated AUC value of 0.8674 is considered a good value. The model is predicting new observations 'good' per the CV AUC value of 0.78532. Because the model did do worse in CV AUC as the value dropped, that is a sign of overfitting. The non-parametric model did worse than the linear model in terms of its cross-validation performance because the non-parametric models CV AUC score is lower than the linear models, but the linear models CV AUC score did drop more than the non-parametric models. *
+
+
+### Regression/Numeric Prediction
+
+```{R}
+fit<-lm(FatalCollisions~.,data=drivers2)
+yhat1 <- predict(fit)
+mean((drivers2$FatalCollisions-yhat1)^2)
+```
+
+```{R}
+set.seed(1234)
+drivers5 <- drivers2 %>% select(-State)
+k=5
+data<-drivers5[sample(nrow(drivers5)),]
+folds<-cut(seq(1:nrow(drivers5)),breaks=k,labels=F)
+diags<-NULL
+for(i in 1:k){
+  train<-data[folds!=i,]
+  test<-data[folds==i,]
+  fit<-lm(FatalCollisions~.,data=train)
+  yhat<-predict(fit,newdata=test)
+  diags<-mean((test$FatalCollisions-yhat)^2) 
+}
+mean(diags)
+```
+*This model does show signs of overfitting, as the MSE value is higher in CV. Across the k testing folds, the overall mean squared error is equal to 16.50434.*
+
+### Python 
+
+```{R}
+library(reticulate)
+drivers8 <- fivethirtyeight::bad_drivers
+head(py$df2)
+```
+
+```{python}
+df=r.drivers8
+df[df["num_drivers"]>20.0]
+
+df2=df[df["num_drivers"]>20.0]
+```
+*Using reticulate, I first shared my drivers dataset between R and Python using r. I narrowed down the dataframe in python to only include states that had over 20.0 for the variable that measures the number of drivers involved in fatal collisions per billion miles. I then shared that object I created with R using py$.*
+
+
